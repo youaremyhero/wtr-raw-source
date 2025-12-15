@@ -23,21 +23,62 @@
       <p class="help-text">Tip: Currently unable to search using English titles</p>
     </section>
 
-    <section class="card">
-      <div class="results-header">
-        <div>
-          <p class="eyebrow">Results</p>
-          <h2 class="results-title">Matching source links</h2>
-          <p id="hint" class="placeholder">Start by searching for a raw novel title.</p>
-        </div>
-        <span id="status" class="status-pill">No results yet</span>
-      </div>
+   <section class="card">
+  <h2>1) Enter raw title (non-English)</h2>
 
-      <div id="meta" class="meta"></div>
-      <div class="results-body">
-        <ul id="list" class="results-list"></ul>
+  <label for="rawTitle">Raw title</label>
+  <div class="input-row">
+    <input id="rawTitle" type="text" placeholder="e.g., 诡秘之主" />
+    <button id="buildLinks" class="primary" type="button">Generate search links</button>
+  </div>
+
+  <div class="input-row" style="margin-top:10px; flex-wrap:wrap;">
+    <div style="min-width:220px;">
+      <label for="engine" style="margin:0 0 6px;">Search engine</label>
+      <select id="engine">
+        <option value="google">Google</option>
+        <option value="bing">Bing</option>
+        <option value="baidu">Baidu</option>
+      </select>
+    </div>
+
+    <div style="min-width:260px;">
+      <label for="mode" style="margin:0 0 6px;">Search mode</label>
+      <select id="mode">
+        <option value="exact_all">Exact phrase (ALL sources)</option>
+        <option value="intitle_all">Title-only (ALL sources)</option>
+        <option value="inurl_book_all">URL pattern (book/page) (ALL sources)</option>
+        <option value="exact_each">Exact phrase (PER source)</option>
+        <option value="intitle_each">Title-only (PER source)</option>
+        <option value="inurl_book_each">URL pattern (book/page) (PER source)</option>
+      </select>
+    </div>
+  </div>
+
+  <details style="margin-top:10px;">
+    <summary>Advanced options (optional)</summary>
+    <div class="input-row" style="margin-top:10px; flex-wrap:wrap;">
+      <div style="min-width:260px; flex:1;">
+        <label for="also" style="margin:0 0 6px;">Also match (OR)</label>
+        <input id="also" type="text" placeholder='e.g., 詭秘之主 (traditional), or other alias' />
       </div>
-    </section>
+      <div style="min-width:260px; flex:1;">
+        <label for="exclude" style="margin:0 0 6px;">Exclude words</label>
+        <input id="exclude" type="text" placeholder='e.g., 同人 续 目录 最新' />
+      </div>
+    </div>
+    <p class="help-text">
+      Tip: “Also match” becomes (<code>RAW</code> OR <code>ALSO</code>). “Exclude” becomes <code>-word</code>.
+    </p>
+  </details>
+
+  <p class="help-text">
+    This tool generates search URLs only (no scraping). Click results in a new tab, then paste a novel URL below.
+  </p>
+
+  <div id="searchLinks" class="links-grid" aria-live="polite"></div>
+</section>
+
   </main>
 
   <script src="js/app.js" type="module"></script>
