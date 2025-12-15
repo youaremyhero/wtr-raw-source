@@ -11,30 +11,36 @@ export default {
 
       if (!q) return cors(json({ error: "Missing q" }, 400));
 
-      // 1) Resolve raw title if input likely English
-      let rawTitle = q;
-      let nu = { seriesUrl: null, resolved: false, rawTitle: null, associatedNames: [] };
-
+      // Enforce raw-title-only: reject mostly-English input
       if (looksEnglish(q)) {
-        nu = await resolveViaNovelUpdates(q, debugMode);
-        if (nu.rawTitle) rawTitle = nu.rawTitle;
+        return cors(json({
+          error: "Raw titles only",
+          message: "Please paste the novel’s original-language (raw) title. English titles are not supported in this version."
+        }, 400));
       }
 
-      // 2) Search allowed sources for raw title
+      // Cache whole response
+      const cacheKey = new Request(url.toString(), { method: "GET" });
+      const cached = await caches.default.match(cacheKey);
+      if (cached) return cors(cached);
+
       const debug = [];
-      const matches = await findSourceMatches(rawTitle, { debugMode, debug });
+      const matches = await findSourceMatches(q, { debugMode, debug });
 
       const payload = {
         query: q,
-        rawTitle: rawTitle !== q ? rawTitle : null,
-        nu,
         matches,
         notFound: matches.length === 0
       };
 
       if (debugMode) payload.debug = debug;
 
-      return cors(json(payload));
+      const res = json(payload);
+
+      // Cache for 30 minutes
+      ctx.waitUntil(caches.default.put(cacheKey, res.clone()));
+
+      return cors(res);
     }
 
     return cors(new Response("Not found", { status: 404 }));
@@ -64,115 +70,97 @@ const SOURCES = [
 ];
 
 // -----------------------------
-// NovelUpdates resolution
+// SearXNG backend rotation
 // -----------------------------
-async function resolveViaNovelUpdates(englishTitle, debugMode) {
-  const query = `site:novelupdates.com/series "${englishTitle}"`;
+// Public instances can change; keep a short list and rotate.
+// If one consistently fails, remove it.
+const SEARX_INSTANCES = [
+  "https://searx.be",
+  "https://search.bus-hit.me",
+  "https://searx.fmac.xyz",
+  "https://searx.tiekoetter.com",
+];
 
-  const r = await ddgLiteSearchSmart(query);
+async function searxSearch(query, { debugMode, label, debug }) {
+  const bases = shuffle([...SEARX_INSTANCES]);
 
-  const links = extractDuckDuckGoLiteLinks(r.text);
-  const external = links.filter(isExternalResultLink);
+  for (const base of bases) {
+    const u = new URL("/search", base);
+    u.searchParams.set("q", query);
+    u.searchParams.set("format", "json");
+    u.searchParams.set("language", "zh");
+    u.searchParams.set("safesearch", "0");
 
-  const seriesUrl =
-    external.find(u => /^https?:\/\/(www\.)?novelupdates\.com\/series\//i.test(u)) || null;
-
-  if (!seriesUrl) {
-    return {
-      seriesUrl: null,
-      resolved: false,
-      rawTitle: null,
-      associatedNames: [],
-      ...(debugMode ? {
-        debug: {
-          ddg: pickDebug(r),
-          extractedLinks: links.length,
-          externalLinks: external.length,
-          sampleLinks: links.slice(0, 10),
-          sampleExternal: external.slice(0, 10)
+    try {
+      const res = await fetch(u.toString(), {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          "Accept": "application/json"
         }
-      } : {})
-    };
+      });
+
+      const text = await res.text().catch(() => "");
+
+      if (!res.ok) {
+        if (debugMode) debug.push({
+          type: "searx",
+          label,
+          base,
+          ok: false,
+          status: res.status,
+          head: text.slice(0, 140)
+        });
+        continue;
+      }
+
+      let data = null;
+      try { data = JSON.parse(text); } catch { data = null; }
+
+      const urls = (data?.results || [])
+        .map(r => r?.url)
+        .filter(Boolean);
+
+      if (debugMode) debug.push({
+        type: "searx",
+        label,
+        base,
+        ok: true,
+        status: res.status,
+        results: urls.length,
+        sample: urls.slice(0, 5)
+      });
+
+      if (urls.length) return { ok: true, via: "searx", base, urls };
+    } catch (e) {
+      if (debugMode) debug.push({
+        type: "searx",
+        label,
+        base,
+        ok: false,
+        error: String(e).slice(0, 180)
+      });
+      continue;
+    }
   }
 
-  const page = await fetchText(seriesUrl);
-  const associated = parseAssociatedNames(page);
-  const rawTitle = pickLikelyRawTitle(associated);
-
-  const out = { seriesUrl, resolved: !!rawTitle, rawTitle: rawTitle || null, associatedNames: associated };
-
-  if (debugMode) {
-    out.debug = {
-      ddg: pickDebug(r),
-      extractedLinks: links.length,
-      externalLinks: external.length,
-      sampleExternal: external.slice(0, 10)
-    };
-  }
-
-  return out;
-}
-
-function parseAssociatedNames(html) {
-  const idx = html.toLowerCase().indexOf("associated names");
-  if (idx === -1) return [];
-
-  const slice = html.slice(idx, idx + 9000);
-  const names = new Set();
-
-  // list items
-  for (const m of slice.matchAll(/<li[^>]*>(.*?)<\/li>/gis)) {
-    const txt = stripTags(m[1]).trim();
-    if (txt) names.add(txt);
-  }
-
-  // br separated fallback
-  const brBlock = slice.match(/associated names[\s\S]*?(<br[\s\/]*>[\s\S]*?)(<\/div>|<\/section>|<\/table>)/i);
-  if (brBlock) {
-    const parts = brBlock[1]
-      .split(/<br[\s\/]*>/i)
-      .map(s => stripTags(s).trim())
-      .filter(Boolean);
-    for (const p of parts) names.add(p);
-  }
-
-  return [...names].slice(0, 30);
-}
-
-function pickLikelyRawTitle(names) {
-  if (!names?.length) return null;
-  const cjk = names.find(n => /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(n));
-  return cjk || names[0];
+  return { ok: false, via: "searx", base: null, urls: [] };
 }
 
 // -----------------------------
-// Search allowed sources
+// Find source matches
 // -----------------------------
 async function findSourceMatches(rawTitle, { debugMode, debug }) {
   const tasks = SOURCES.map(async (s) => {
     const domain = domainFromRe(s.re);
+
+    // Quote the raw title for exact match where possible
     const query = `"${rawTitle}" site:${domain}`;
 
-    const r = await ddgLiteSearchSmart(query);
+    const r = await searxSearch(query, { debugMode, label: s.source, debug });
+    if (!r.ok || !r.urls.length) return null;
 
-    const links = extractDuckDuckGoLiteLinks(r.text);
-    const external = links.filter(isExternalResultLink);
-
-    if (debugMode) {
-      debug.push({
-        source: s.source,
-        domain,
-        query,
-        ...pickDebug(r),
-        extractedLinks: links.length,
-        externalLinks: external.length,
-        sampleExternal: external.slice(0, 5)
-      });
-    }
-
-    if (!r.ok || external.length === 0) return null;
-
-    const foundUrl = external.find(u => s.re.test(u)) || null;
+    // Find first URL matching the source pattern
+    const foundUrl = r.urls.find(u => s.re.test(u)) || null;
     if (!foundUrl) return null;
 
     const m = foundUrl.match(s.re);
@@ -189,122 +177,13 @@ async function findSourceMatches(rawTitle, { debugMode, debug }) {
 
   const results = (await Promise.all(tasks)).filter(Boolean);
 
+  // De-dupe by canonicalUrl
   const seen = new Set();
   return results.filter(r => (seen.has(r.canonicalUrl) ? false : (seen.add(r.canonicalUrl), true)));
 }
 
 // -----------------------------
-// DDG Lite smart: direct -> proxy if needed
-//   - proxy if status != 200
-//   - proxy if status==200 but no external links
-// -----------------------------
-async function ddgLiteSearchSmart(query) {
-  const direct = await ddgLiteSearchDirect(query);
-
-  if (direct.status === 200) {
-    const links = extractDuckDuckGoLiteLinks(direct.text);
-    const external = links.filter(isExternalResultLink);
-    if (external.length > 0) return direct; // usable
-  }
-
-  // fallback
-  const proxy = await ddgLiteSearchViaJina(query);
-
-  if (proxy.status === 200) {
-    const links = extractDuckDuckGoLiteLinks(proxy.text);
-    const external = links.filter(isExternalResultLink);
-    if (external.length > 0) return proxy;
-  }
-
-  // return "least bad" for debug
-  return (proxy.status === 200 ? proxy : direct);
-}
-
-async function ddgLiteSearchDirect(query) {
-  const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept-Language": "en-US,en;q=0.9"
-    }
-  });
-  const text = await res.text().catch(() => "");
-  return { ok: res.ok, status: res.status, url: res.url, text, via: "direct" };
-}
-
-async function ddgLiteSearchViaJina(query) {
-  const target = `http://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
-  const url = `https://r.jina.ai/${target}`;
-
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept-Language": "en-US,en;q=0.9"
-    }
-  });
-
-  const text = await res.text().catch(() => "");
-  return { ok: res.ok, status: res.status, url: res.url, text, via: "proxy" };
-}
-
-// -----------------------------
-// Link extraction (robust)
-//   - href="..."
-//   - href='...'
-//   - href=unquoted
-//   - decode /l/?uddg=...
-// -----------------------------
-function extractDuckDuckGoLiteLinks(html) {
-  const out = [];
-
-  const re = /href=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi;
-
-  for (const m of html.matchAll(re)) {
-    const href = m[1] || m[2] || m[3];
-    if (!href) continue;
-
-    try {
-      const u = new URL(href, "https://duckduckgo.com");
-      const uddg = u.searchParams.get("uddg");
-
-      if (uddg) {
-        out.push(decodeURIComponent(uddg));
-      } else if (u.protocol.startsWith("http")) {
-        out.push(u.href);
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // de-dupe preserve order
-  const seen = new Set();
-  return out.filter(x => (seen.has(x) ? false : (seen.add(x), true)));
-}
-
-function isExternalResultLink(u) {
-  try {
-    const host = new URL(u).hostname.replace(/^www\./, "");
-    if (host.endsWith("duckduckgo.com")) return false;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function pickDebug(r) {
-  return {
-    ok: r.ok,
-    status: r.status,
-    via: r.via || "unknown",
-    url: r.url,
-    len: r.text.length,
-    head: r.text.slice(0, 140)
-  };
-}
-
-// -----------------------------
-// Domain extraction helper
+// Helpers
 // -----------------------------
 function domainFromRe(re) {
   const unescaped = re.source
@@ -318,19 +197,6 @@ function domainFromRe(re) {
   return loose?.[1] || "";
 }
 
-// -----------------------------
-// Generic helpers
-// -----------------------------
-async function fetchText(url, init = {}) {
-  const res = await fetch(url, init);
-  if (!res.ok) return "";
-  return await res.text();
-}
-
-function stripTags(html) {
-  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-}
-
 function looksEnglish(s) {
   const ascii = (s.match(/[\x20-\x7E]/g) || []).length;
   return ascii / Math.max(1, s.length) > 0.85;
@@ -339,7 +205,10 @@ function looksEnglish(s) {
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8" }
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "public, max-age=1800"
+    }
   });
 }
 
@@ -349,4 +218,12 @@ function cors(res) {
   h.set("Access-Control-Allow-Methods", "GET,OPTIONS");
   h.set("Access-Control-Allow-Headers", "Content-Type");
   return new Response(res.body, { status: res.status, headers: h });
+}
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 }
