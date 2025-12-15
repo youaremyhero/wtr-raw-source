@@ -27,7 +27,7 @@ export default {
 
       const payload = {
         query: q,
-        rawTitle: rawTitle !== q ? rawTitle : null, // keep your previous convention
+        rawTitle: rawTitle !== q ? rawTitle : null,
         nu,
         matches,
         notFound: !matches.length
@@ -68,9 +68,8 @@ const SOURCES = [
 // NovelUpdates resolution
 // -----------------------------
 async function resolveViaNovelUpdates(englishTitle, debugMode) {
-  // Step A: find a /series/ page by searching DuckDuckGo Lite
   const query = `site:novelupdates.com/series "${englishTitle}"`;
-  const r = await ddgLiteSearch(query);
+  const r = await ddgLiteSearchWithFallback(query);
 
   const links = extractDuckDuckGoLiteLinks(r.text);
   const seriesUrl = links.find(u => /^https?:\/\/www\.novelupdates\.com\/series\//i.test(u)) || null;
@@ -85,10 +84,8 @@ async function resolveViaNovelUpdates(englishTitle, debugMode) {
     };
   }
 
-  // Step B: fetch series page and parse "Associated Names"
   const page = await fetchText(seriesUrl);
   const associated = parseAssociatedNames(page);
-
   const rawTitle = pickLikelyRawTitle(associated);
 
   const out = { seriesUrl, resolved: !!rawTitle, rawTitle: rawTitle || null, associatedNames: associated };
@@ -127,14 +124,14 @@ function pickLikelyRawTitle(names) {
 }
 
 // -----------------------------
-// Search allowed sources (using DDG Lite + decoded urls)
+// Search allowed sources (DDG Lite + decoded urls)
 // -----------------------------
 async function findSourceMatches(rawTitle, { debugMode, debug }) {
   const tasks = SOURCES.map(async (s) => {
     const domain = domainFromRe(s.re);
     const query = `"${rawTitle}" site:${domain}`;
 
-    const r = await ddgLiteSearch(query);
+    const r = await ddgLiteSearchWithFallback(query);
 
     if (debugMode) {
       debug.push({
@@ -145,11 +142,9 @@ async function findSourceMatches(rawTitle, { debugMode, debug }) {
       });
     }
 
-    // If blocked/empty, no point continuing
-    if (!r.ok || r.text.length < 200) return null;
+    if (!r.ok || r.text.length < 500) return null;
 
     const links = extractDuckDuckGoLiteLinks(r.text);
-
     const foundUrl = links.find(u => s.re.test(u)) || null;
     if (!foundUrl) return null;
 
@@ -167,16 +162,46 @@ async function findSourceMatches(rawTitle, { debugMode, debug }) {
 
   const results = (await Promise.all(tasks)).filter(Boolean);
 
-  // De-dupe by canonicalUrl
   const seen = new Set();
   return results.filter(r => (seen.has(r.canonicalUrl) ? false : (seen.add(r.canonicalUrl), true)));
 }
 
 // -----------------------------
-// DuckDuckGo Lite search
+// DuckDuckGo Lite search + fallback when blocked (202)
 // -----------------------------
+async function ddgLiteSearchWithFallback(query) {
+  // Attempt 1: direct
+  const direct = await ddgLiteSearch(query);
+  if (direct.ok && direct.status === 200) return direct;
+
+  // If DDG returns 202 or other non-200, try fallback via Jina reader proxy
+  // (This fetches the DDG Lite HTML through a different origin)
+  const proxied = await ddgLiteSearchViaJina(query);
+
+  // Return proxied even if not perfect; debug will show which one worked
+  if (proxied.ok && proxied.status === 200) return proxied;
+
+  // If both fail, return the direct one (useful for debug)
+  return direct;
+}
+
 async function ddgLiteSearch(query) {
   const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      "Accept-Language": "en-US,en;q=0.9"
+    }
+  });
+  const text = await res.text().catch(() => "");
+  return { ok: res.ok, status: res.status, url: res.url, text, via: "direct" };
+}
+
+async function ddgLiteSearchViaJina(query) {
+  // Jina format: https://r.jina.ai/http://example.com/path
+  // Use http://lite.duckduckgo.com to avoid double-https issues with the proxy
+  const target = `http://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
+  const url = `https://r.jina.ai/${target}`;
 
   const res = await fetch(url, {
     headers: {
@@ -186,11 +211,10 @@ async function ddgLiteSearch(query) {
   });
 
   const text = await res.text().catch(() => "");
-  return { ok: res.ok, status: res.status, url: res.url, text };
+  return { ok: res.ok, status: res.status, url: res.url, text, via: "proxy" };
 }
 
 function extractDuckDuckGoLiteLinks(html) {
-  // Grab all hrefs, decode /l/?uddg= links to real URLs
   const out = [];
   for (const m of html.matchAll(/href="([^"]+)"/gi)) {
     const href = m[1];
@@ -209,7 +233,6 @@ function extractDuckDuckGoLiteLinks(html) {
     }
   }
 
-  // de-dupe while preserving order
   const seen = new Set();
   return out.filter(x => (seen.has(x) ? false : (seen.add(x), true)));
 }
@@ -218,6 +241,7 @@ function pickDebug(r) {
   return {
     ok: r.ok,
     status: r.status,
+    via: r.via || "unknown",
     url: r.url,
     len: r.text.length,
     head: r.text.slice(0, 140)
@@ -244,7 +268,6 @@ function domainFromRe(re) {
 // -----------------------------
 async function fetchText(url, init = {}) {
   const res = await fetch(url, init);
-  // keep your original behavior (silent failures), but now we debug DDG separately
   if (!res.ok) return "";
   return await res.text();
 }
