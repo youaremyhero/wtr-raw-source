@@ -2,7 +2,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // CORS for GitHub Pages
+    // CORS preflight
     if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
 
     if (url.pathname === "/search") {
@@ -11,26 +11,26 @@ export default {
 
       if (!q) return cors(json({ error: "Missing q" }, 400));
 
-      // 1) Resolve raw title if input is likely English
       let rawTitle = q;
       let nu = { seriesUrl: null, resolved: false, rawTitle: null, associatedNames: [] };
 
+      // Try NovelUpdates resolution only if query looks English-ish
       if (looksEnglish(q)) {
         const nuRes = await resolveViaNovelUpdates(q, debugMode);
         nu = nuRes;
         if (nuRes.rawTitle) rawTitle = nuRes.rawTitle;
       }
 
-      // 2) Search allowed source domains for raw title
       const debug = [];
       const matches = await findSourceMatches(rawTitle, { debugMode, debug });
 
       const payload = {
         query: q,
+        // keep your original convention (null if unchanged)
         rawTitle: rawTitle !== q ? rawTitle : null,
         nu,
         matches,
-        notFound: !matches.length
+        notFound: matches.length === 0
       };
 
       if (debugMode) payload.debug = debug;
@@ -43,7 +43,7 @@ export default {
 };
 
 // -----------------------------
-// Config: your allowed sources
+// Allowed sources
 // -----------------------------
 const SOURCES = [
   { source:"fanqienovel",  re:/https?:\/\/fanqienovel\.com\/page\/(\d+)/i,                        canonical:id=>`https://fanqienovel.com/page/${id}` },
@@ -65,13 +65,15 @@ const SOURCES = [
 ];
 
 // -----------------------------
-// NovelUpdates resolution
+// NovelUpdates resolution (via DDG Lite + fallback)
 // -----------------------------
 async function resolveViaNovelUpdates(englishTitle, debugMode) {
   const query = `site:novelupdates.com/series "${englishTitle}"`;
-  const r = await ddgLiteSearchWithFallback(query);
 
+  const r = await ddgLiteSearchSmart(query);
   const links = extractDuckDuckGoLiteLinks(r.text);
+
+  // NOTE: If links is empty even though status=200, it was likely an interstitial / empty result page.
   const seriesUrl = links.find(u => /^https?:\/\/www\.novelupdates\.com\/series\//i.test(u)) || null;
 
   if (!seriesUrl) {
@@ -80,7 +82,7 @@ async function resolveViaNovelUpdates(englishTitle, debugMode) {
       resolved: false,
       rawTitle: null,
       associatedNames: [],
-      ...(debugMode ? { debug: { ddg: pickDebug(r) } } : {})
+      ...(debugMode ? { debug: { ddg: pickDebug(r), extractedLinks: links.length } } : {})
     };
   }
 
@@ -89,7 +91,7 @@ async function resolveViaNovelUpdates(englishTitle, debugMode) {
   const rawTitle = pickLikelyRawTitle(associated);
 
   const out = { seriesUrl, resolved: !!rawTitle, rawTitle: rawTitle || null, associatedNames: associated };
-  if (debugMode) out.debug = { ddg: pickDebug(r) };
+  if (debugMode) out.debug = { ddg: pickDebug(r), extractedLinks: links.length };
   return out;
 }
 
@@ -124,27 +126,29 @@ function pickLikelyRawTitle(names) {
 }
 
 // -----------------------------
-// Search allowed sources (DDG Lite + decoded urls)
+// Source matching (DDG Lite + fallback)
 // -----------------------------
 async function findSourceMatches(rawTitle, { debugMode, debug }) {
   const tasks = SOURCES.map(async (s) => {
     const domain = domainFromRe(s.re);
     const query = `"${rawTitle}" site:${domain}`;
 
-    const r = await ddgLiteSearchWithFallback(query);
+    const r = await ddgLiteSearchSmart(query);
+    const links = extractDuckDuckGoLiteLinks(r.text);
 
     if (debugMode) {
       debug.push({
         source: s.source,
         domain,
         query,
-        ...pickDebug(r)
+        ...pickDebug(r),
+        extractedLinks: links.length
       });
     }
 
-    if (!r.ok || r.text.length < 500) return null;
+    // If blocked/empty, no point continuing
+    if (!r.ok || links.length === 0) return null;
 
-    const links = extractDuckDuckGoLiteLinks(r.text);
     const foundUrl = links.find(u => s.re.test(u)) || null;
     if (!foundUrl) return null;
 
@@ -162,30 +166,42 @@ async function findSourceMatches(rawTitle, { debugMode, debug }) {
 
   const results = (await Promise.all(tasks)).filter(Boolean);
 
+  // De-dupe by canonicalUrl
   const seen = new Set();
   return results.filter(r => (seen.has(r.canonicalUrl) ? false : (seen.add(r.canonicalUrl), true)));
 }
 
 // -----------------------------
-// DuckDuckGo Lite search + fallback when blocked (202)
+// DDG Lite smart fetch
+//   - Try direct
+//   - If status=202 OR no usable links, fallback via Jina proxy
 // -----------------------------
-async function ddgLiteSearchWithFallback(query) {
-  // Attempt 1: direct
-  const direct = await ddgLiteSearch(query);
-  if (direct.ok && direct.status === 200) return direct;
+async function ddgLiteSearchSmart(query) {
+  const direct = await ddgLiteSearchDirect(query);
 
-  // If DDG returns 202 or other non-200, try fallback via Jina reader proxy
-  // (This fetches the DDG Lite HTML through a different origin)
-  const proxied = await ddgLiteSearchViaJina(query);
+  // Quick detection: 202 is "not giving results"
+  if (direct.status === 200) {
+    // Even with 200, DDG may return a page without outbound links.
+    // We'll check link extraction; if none, try proxy.
+    const directLinks = extractDuckDuckGoLiteLinks(direct.text);
+    if (directLinks.length > 0) return direct;
+  }
 
-  // Return proxied even if not perfect; debug will show which one worked
-  if (proxied.ok && proxied.status === 200) return proxied;
+  // If direct is 202/403/anything non-200 OR 200-with-no-links, try proxy
+  const proxy = await ddgLiteSearchViaJina(query);
 
-  // If both fail, return the direct one (useful for debug)
-  return direct;
+  // Prefer proxy if it looks usable
+  if (proxy.status === 200) {
+    const proxyLinks = extractDuckDuckGoLiteLinks(proxy.text);
+    if (proxyLinks.length > 0) return proxy;
+  }
+
+  // Fall back to whichever is "less bad" for debugging
+  // (e.g. direct 200 with empty links vs proxy 403)
+  return (proxy.status === 200 ? proxy : direct);
 }
 
-async function ddgLiteSearch(query) {
+async function ddgLiteSearchDirect(query) {
   const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
   const res = await fetch(url, {
     headers: {
@@ -198,8 +214,8 @@ async function ddgLiteSearch(query) {
 }
 
 async function ddgLiteSearchViaJina(query) {
-  // Jina format: https://r.jina.ai/http://example.com/path
-  // Use http://lite.duckduckgo.com to avoid double-https issues with the proxy
+  // Jina reads the target URL server-side and returns HTML as text.
+  // Use http:// for the target to avoid proxy quirks.
   const target = `http://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
   const url = `https://r.jina.ai/${target}`;
 
@@ -214,25 +230,35 @@ async function ddgLiteSearchViaJina(query) {
   return { ok: res.ok, status: res.status, url: res.url, text, via: "proxy" };
 }
 
+// -----------------------------
+// Link extraction for DDG Lite
+//   - supports href="..."
+//   - href='...'
+//   - href=... (unquoted)
+//   - decodes /l/?uddg=...
+// -----------------------------
 function extractDuckDuckGoLiteLinks(html) {
   const out = [];
-  for (const m of html.matchAll(/href="([^"]+)"/gi)) {
-    const href = m[1];
+
+  // Match href= "..." OR '...' OR unquoted
+  const re = /href=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi;
+
+  for (const m of html.matchAll(re)) {
+    const href = m[1] || m[2] || m[3];
+    if (!href) continue;
 
     try {
       const u = new URL(href, "https://duckduckgo.com");
       const uddg = u.searchParams.get("uddg");
 
-      if (uddg) {
-        out.push(decodeURIComponent(uddg));
-      } else if (u.protocol.startsWith("http")) {
-        out.push(u.href);
-      }
+      if (uddg) out.push(decodeURIComponent(uddg));
+      else if (u.protocol.startsWith("http")) out.push(u.href);
     } catch {
       // ignore
     }
   }
 
+  // de-dupe preserve order
   const seen = new Set();
   return out.filter(x => (seen.has(x) ? false : (seen.add(x), true)));
 }
@@ -249,7 +275,7 @@ function pickDebug(r) {
 }
 
 // -----------------------------
-// Domain helper
+// Domain extraction helper
 // -----------------------------
 function domainFromRe(re) {
   const unescaped = re.source
