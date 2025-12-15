@@ -1,67 +1,176 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Raw Novel Source Search</title>
-  <link rel="stylesheet" href="styles/styles.css" />
+  <style>
+    :root { --card:#fff; --text:#0f172a; --muted:#64748b; --blue:#2563eb; --border:#e2e8f0; }
+    body{
+      margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      color:var(--text);
+      background: radial-gradient(circle at 20% 20%, #dbeafe, transparent 45%),
+                  radial-gradient(circle at 80% 20%, #fee2e2, transparent 45%),
+                  #f8fafc;
+    }
+    .wrap{ max-width: 1100px; margin: 0 auto; padding: 56px 20px 80px; }
+    h1{ font-size: 56px; letter-spacing: -0.02em; text-align:center; margin:0; }
+    .sub{ text-align:center; color:var(--muted); margin-top: 10px; font-size: 22px; }
+    .card{ background:var(--card); border:1px solid var(--border); border-radius: 18px; box-shadow: 0 10px 30px rgba(2,6,23,.08); }
+    .grid{ display:grid; gap:24px; margin-top: 36px; }
+    .card-pad{ padding: 34px; }
+    .title{ font-size: 34px; margin:0 0 18px; }
+    label{ display:block; font-weight:700; margin: 0 0 8px; font-size: 20px; }
+    .row{ display:flex; gap: 16px; align-items: stretch; }
+    input{
+      flex:1; border:2px solid #c7d2fe; outline: none; border-radius: 14px;
+      padding: 18px 18px; font-size: 22px;
+      box-shadow: 0 0 0 4px rgba(37,99,235,.10) inset;
+    }
+    button{
+      border:0; border-radius: 14px; padding: 0 28px; font-weight:800; font-size: 20px;
+      background: var(--blue); color:#fff; cursor:pointer;
+      box-shadow: 0 10px 20px rgba(37,99,235,.25);
+    }
+    button:disabled{ opacity:.55; cursor:not-allowed; box-shadow:none; }
+    .results-head{ display:flex; justify-content:space-between; align-items:flex-start; gap: 16px; }
+    .kicker{ color: var(--blue); font-weight: 900; letter-spacing: .08em; font-size: 14px; }
+    .big{ font-size: 40px; margin: 8px 0 0; }
+    .muted{ color: var(--muted); font-size: 20px; margin-top: 10px; }
+    .pill{ color: var(--muted); font-weight:700; }
+    .list{ margin-top: 18px; display:grid; gap: 12px; }
+    .item{
+      padding: 14px 16px; border:1px solid var(--border); border-radius: 14px;
+      display:flex; justify-content:space-between; align-items:center; gap: 12px;
+    }
+    .item a{ color: var(--blue); text-decoration:none; font-weight: 800; word-break: break-all; }
+    .tag{ font-size: 12px; color:#334155; background:#e2e8f0; padding:6px 10px; border-radius:999px; font-weight:800; white-space:nowrap; }
+    .small{ font-size: 14px; color: var(--muted); margin-top: 14px; line-height: 1.4; }
+    .err{ color:#b91c1c; font-weight: 800; }
+  </style>
 </head>
 <body>
-  <header class="page-header">
+  <div class="wrap">
     <h1>Raw Novel Source Search</h1>
-    <p class="lede">Find raw source links for your favorite novels.</p>
-  </header>
+    <div class="sub">Find raw source links for your favorite novels.</div>
 
-  <main>
-    <section aria-labelledby="search-section-title" class="search-panel">
-      <div class="card">
-        <h2 id="search-section-title">Search by Title</h2>
-        <form class="search-form" aria-label="Raw novel search form">
-          <label for="novel-title">Raw novel title</label>
-          <div class="input-row">
-            <input
-              type="text"
-              id="novel-title"
-              name="novel-title"
-              placeholder="Enter the raw novel title"
-              autocomplete="off"
-              required
-              data-binding="title"
-            />
-            <button type="submit" class="primary" data-action="submit">Search</button>
-          </div>
-        </form>
-      </div>
-    </section>
-
-    <section aria-labelledby="results-section-title" class="results-panel">
-      <div class="card">
-        <header class="results-header">
-          <div>
-            <p class="eyebrow">Results</p>
-            <h2 id="results-section-title">Matching source links</h2>
-          </div>
-          <p class="result-count" aria-live="polite" data-binding="result-count">No results yet</p>
-        </header>
-
-        <div class="results-body" aria-live="polite" data-binding="results">
-          <p class="placeholder" data-state="empty">Start by searching for a raw novel title.</p>
-          <p class="placeholder" data-state="not-found" hidden>No matching sources found.</p>
-          <ul class="results-list" data-state="found" hidden>
-            <li class="result-item" data-template hidden>
-              <article>
-                <h3 data-binding="source-title">Source Title</h3>
-                <p class="source-url">
-                  <a href="#" data-binding="source-url">https://example.com/source</a>
-                </p>
-              </article>
-            </li>
-          </ul>
+    <div class="grid">
+      <div class="card card-pad">
+        <h2 class="title">Search by Title</h2>
+        <label for="q">Raw novel title or English title</label>
+        <div class="row">
+          <input id="q" placeholder="Enter raw title (非英文) or English title" />
+          <button id="btn">Search</button>
+        </div>
+        <div class="small">
+          Tip: If you enter an English title, we’ll try NovelUpdates to resolve the raw title first.
         </div>
       </div>
-    </section>
-  </main>
 
-  <script src="js/main.js"></script>
+      <div class="card card-pad">
+        <div class="results-head">
+          <div>
+            <div class="kicker">RESULTS</div>
+            <div class="big">Matching source links</div>
+            <div id="hint" class="muted">Start by searching for a raw novel title.</div>
+          </div>
+          <div id="status" class="pill">No results yet</div>
+        </div>
+
+        <div id="meta" class="small"></div>
+        <div id="list" class="list"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // ✅ Replace with your Worker URL
+  const API = "https://YOUR-WORKER-NAME.YOUR-SUBDOMAIN.workers.dev/search";
+
+  const qEl = document.getElementById("q");
+  const btn = document.getElementById("btn");
+  const list = document.getElementById("list");
+  const hint = document.getElementById("hint");
+  const status = document.getElementById("status");
+  const meta = document.getElementById("meta");
+
+  function setLoading(on){
+    btn.disabled = on;
+    status.textContent = on ? "Searching..." : "Done";
+  }
+
+  function clearUI(){
+    list.innerHTML = "";
+    meta.textContent = "";
+  }
+
+  function render(data){
+    clearUI();
+
+    const { query, rawTitle, nu, matches, notFound } = data;
+
+    if (notFound){
+      status.textContent = "Not found";
+      hint.innerHTML = `<span class="err">No matching source links found.</span>`;
+      meta.innerHTML = `
+        <div><b>Input:</b> ${escapeHtml(query)}</div>
+        ${rawTitle ? `<div><b>Resolved raw title:</b> ${escapeHtml(rawTitle)}</div>` : ""}
+        ${nu?.seriesUrl ? `<div><b>NovelUpdates:</b> <a href="${nu.seriesUrl}" target="_blank" rel="noopener">series page</a></div>` : ""}
+      `;
+      return;
+    }
+
+    status.textContent = `${matches.length} result(s)`;
+    hint.textContent = rawTitle ? `Showing results for: ${rawTitle}` : "Showing results.";
+
+    meta.innerHTML = `
+      <div><b>Input:</b> ${escapeHtml(query)}</div>
+      ${rawTitle ? `<div><b>Resolved raw title:</b> ${escapeHtml(rawTitle)}</div>` : ""}
+      ${nu?.seriesUrl ? `<div><b>NovelUpdates:</b> <a href="${nu.seriesUrl}" target="_blank" rel="noopener">series page</a></div>` : ""}
+    `;
+
+    for (const m of matches){
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `
+        <div>
+          <div><a href="${m.canonicalUrl}" target="_blank" rel="noopener">${m.canonicalUrl}</a></div>
+          <div class="small">Found: <a href="${m.foundUrl}" target="_blank" rel="noopener">${m.foundUrl}</a></div>
+        </div>
+        <div class="tag">${m.source}</div>
+      `;
+      list.appendChild(div);
+    }
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  async function doSearch(){
+    const query = qEl.value.trim();
+    if (!query) return;
+
+    setLoading(true);
+    hint.textContent = "Searching…";
+    status.textContent = "Searching…";
+    clearUI();
+
+    try{
+      const res = await fetch(`${API}?q=${encodeURIComponent(query)}`, { method: "GET" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      render(data);
+    }catch(e){
+      status.textContent = "Error";
+      hint.innerHTML = `<span class="err">Error:</span> ${escapeHtml(e.message)}`;
+    }finally{
+      setLoading(false);
+    }
+  }
+
+  btn.addEventListener("click", doSearch);
+  qEl.addEventListener("keydown", (e)=>{ if (e.key === "Enter") doSearch(); });
+</script>
 </body>
 </html>
