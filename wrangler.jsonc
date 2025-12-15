@@ -1,5 +1,5 @@
 {
-  "name": "raw-novel-source-search",
+  "name": "wtr-raw-source",
   "compatibility_date": "2025-12-15",
   "main": "js/worker.js"
 }
