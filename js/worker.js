@@ -11,22 +11,21 @@ export default {
 
       if (!q) return cors(json({ error: "Missing q" }, 400));
 
+      // 1) Resolve raw title if input likely English
       let rawTitle = q;
       let nu = { seriesUrl: null, resolved: false, rawTitle: null, associatedNames: [] };
 
-      // Try NovelUpdates resolution only if query looks English-ish
       if (looksEnglish(q)) {
-        const nuRes = await resolveViaNovelUpdates(q, debugMode);
-        nu = nuRes;
-        if (nuRes.rawTitle) rawTitle = nuRes.rawTitle;
+        nu = await resolveViaNovelUpdates(q, debugMode);
+        if (nu.rawTitle) rawTitle = nu.rawTitle;
       }
 
+      // 2) Search allowed sources for raw title
       const debug = [];
       const matches = await findSourceMatches(rawTitle, { debugMode, debug });
 
       const payload = {
         query: q,
-        // keep your original convention (null if unchanged)
         rawTitle: rawTitle !== q ? rawTitle : null,
         nu,
         matches,
@@ -65,16 +64,18 @@ const SOURCES = [
 ];
 
 // -----------------------------
-// NovelUpdates resolution (via DDG Lite + fallback)
+// NovelUpdates resolution
 // -----------------------------
 async function resolveViaNovelUpdates(englishTitle, debugMode) {
   const query = `site:novelupdates.com/series "${englishTitle}"`;
 
   const r = await ddgLiteSearchSmart(query);
-  const links = extractDuckDuckGoLiteLinks(r.text);
 
-  // NOTE: If links is empty even though status=200, it was likely an interstitial / empty result page.
-  const seriesUrl = links.find(u => /^https?:\/\/www\.novelupdates\.com\/series\//i.test(u)) || null;
+  const links = extractDuckDuckGoLiteLinks(r.text);
+  const external = links.filter(isExternalResultLink);
+
+  const seriesUrl =
+    external.find(u => /^https?:\/\/(www\.)?novelupdates\.com\/series\//i.test(u)) || null;
 
   if (!seriesUrl) {
     return {
@@ -82,7 +83,15 @@ async function resolveViaNovelUpdates(englishTitle, debugMode) {
       resolved: false,
       rawTitle: null,
       associatedNames: [],
-      ...(debugMode ? { debug: { ddg: pickDebug(r), extractedLinks: links.length } } : {})
+      ...(debugMode ? {
+        debug: {
+          ddg: pickDebug(r),
+          extractedLinks: links.length,
+          externalLinks: external.length,
+          sampleLinks: links.slice(0, 10),
+          sampleExternal: external.slice(0, 10)
+        }
+      } : {})
     };
   }
 
@@ -91,7 +100,16 @@ async function resolveViaNovelUpdates(englishTitle, debugMode) {
   const rawTitle = pickLikelyRawTitle(associated);
 
   const out = { seriesUrl, resolved: !!rawTitle, rawTitle: rawTitle || null, associatedNames: associated };
-  if (debugMode) out.debug = { ddg: pickDebug(r), extractedLinks: links.length };
+
+  if (debugMode) {
+    out.debug = {
+      ddg: pickDebug(r),
+      extractedLinks: links.length,
+      externalLinks: external.length,
+      sampleExternal: external.slice(0, 10)
+    };
+  }
+
   return out;
 }
 
@@ -99,14 +117,16 @@ function parseAssociatedNames(html) {
   const idx = html.toLowerCase().indexOf("associated names");
   if (idx === -1) return [];
 
-  const slice = html.slice(idx, idx + 8000);
+  const slice = html.slice(idx, idx + 9000);
   const names = new Set();
 
+  // list items
   for (const m of slice.matchAll(/<li[^>]*>(.*?)<\/li>/gis)) {
     const txt = stripTags(m[1]).trim();
     if (txt) names.add(txt);
   }
 
+  // br separated fallback
   const brBlock = slice.match(/associated names[\s\S]*?(<br[\s\/]*>[\s\S]*?)(<\/div>|<\/section>|<\/table>)/i);
   if (brBlock) {
     const parts = brBlock[1]
@@ -126,7 +146,7 @@ function pickLikelyRawTitle(names) {
 }
 
 // -----------------------------
-// Source matching (DDG Lite + fallback)
+// Search allowed sources
 // -----------------------------
 async function findSourceMatches(rawTitle, { debugMode, debug }) {
   const tasks = SOURCES.map(async (s) => {
@@ -134,7 +154,9 @@ async function findSourceMatches(rawTitle, { debugMode, debug }) {
     const query = `"${rawTitle}" site:${domain}`;
 
     const r = await ddgLiteSearchSmart(query);
+
     const links = extractDuckDuckGoLiteLinks(r.text);
+    const external = links.filter(isExternalResultLink);
 
     if (debugMode) {
       debug.push({
@@ -142,14 +164,15 @@ async function findSourceMatches(rawTitle, { debugMode, debug }) {
         domain,
         query,
         ...pickDebug(r),
-        extractedLinks: links.length
+        extractedLinks: links.length,
+        externalLinks: external.length,
+        sampleExternal: external.slice(0, 5)
       });
     }
 
-    // If blocked/empty, no point continuing
-    if (!r.ok || links.length === 0) return null;
+    if (!r.ok || external.length === 0) return null;
 
-    const foundUrl = links.find(u => s.re.test(u)) || null;
+    const foundUrl = external.find(u => s.re.test(u)) || null;
     if (!foundUrl) return null;
 
     const m = foundUrl.match(s.re);
@@ -166,38 +189,34 @@ async function findSourceMatches(rawTitle, { debugMode, debug }) {
 
   const results = (await Promise.all(tasks)).filter(Boolean);
 
-  // De-dupe by canonicalUrl
   const seen = new Set();
   return results.filter(r => (seen.has(r.canonicalUrl) ? false : (seen.add(r.canonicalUrl), true)));
 }
 
 // -----------------------------
-// DDG Lite smart fetch
-//   - Try direct
-//   - If status=202 OR no usable links, fallback via Jina proxy
+// DDG Lite smart: direct -> proxy if needed
+//   - proxy if status != 200
+//   - proxy if status==200 but no external links
 // -----------------------------
 async function ddgLiteSearchSmart(query) {
   const direct = await ddgLiteSearchDirect(query);
 
-  // Quick detection: 202 is "not giving results"
   if (direct.status === 200) {
-    // Even with 200, DDG may return a page without outbound links.
-    // We'll check link extraction; if none, try proxy.
-    const directLinks = extractDuckDuckGoLiteLinks(direct.text);
-    if (directLinks.length > 0) return direct;
+    const links = extractDuckDuckGoLiteLinks(direct.text);
+    const external = links.filter(isExternalResultLink);
+    if (external.length > 0) return direct; // usable
   }
 
-  // If direct is 202/403/anything non-200 OR 200-with-no-links, try proxy
+  // fallback
   const proxy = await ddgLiteSearchViaJina(query);
 
-  // Prefer proxy if it looks usable
   if (proxy.status === 200) {
-    const proxyLinks = extractDuckDuckGoLiteLinks(proxy.text);
-    if (proxyLinks.length > 0) return proxy;
+    const links = extractDuckDuckGoLiteLinks(proxy.text);
+    const external = links.filter(isExternalResultLink);
+    if (external.length > 0) return proxy;
   }
 
-  // Fall back to whichever is "less bad" for debugging
-  // (e.g. direct 200 with empty links vs proxy 403)
+  // return "least bad" for debug
   return (proxy.status === 200 ? proxy : direct);
 }
 
@@ -214,8 +233,6 @@ async function ddgLiteSearchDirect(query) {
 }
 
 async function ddgLiteSearchViaJina(query) {
-  // Jina reads the target URL server-side and returns HTML as text.
-  // Use http:// for the target to avoid proxy quirks.
   const target = `http://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
   const url = `https://r.jina.ai/${target}`;
 
@@ -231,16 +248,15 @@ async function ddgLiteSearchViaJina(query) {
 }
 
 // -----------------------------
-// Link extraction for DDG Lite
-//   - supports href="..."
+// Link extraction (robust)
+//   - href="..."
 //   - href='...'
-//   - href=... (unquoted)
-//   - decodes /l/?uddg=...
+//   - href=unquoted
+//   - decode /l/?uddg=...
 // -----------------------------
 function extractDuckDuckGoLiteLinks(html) {
   const out = [];
 
-  // Match href= "..." OR '...' OR unquoted
   const re = /href=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi;
 
   for (const m of html.matchAll(re)) {
@@ -251,8 +267,11 @@ function extractDuckDuckGoLiteLinks(html) {
       const u = new URL(href, "https://duckduckgo.com");
       const uddg = u.searchParams.get("uddg");
 
-      if (uddg) out.push(decodeURIComponent(uddg));
-      else if (u.protocol.startsWith("http")) out.push(u.href);
+      if (uddg) {
+        out.push(decodeURIComponent(uddg));
+      } else if (u.protocol.startsWith("http")) {
+        out.push(u.href);
+      }
     } catch {
       // ignore
     }
@@ -261,6 +280,16 @@ function extractDuckDuckGoLiteLinks(html) {
   // de-dupe preserve order
   const seen = new Set();
   return out.filter(x => (seen.has(x) ? false : (seen.add(x), true)));
+}
+
+function isExternalResultLink(u) {
+  try {
+    const host = new URL(u).hostname.replace(/^www\./, "");
+    if (host.endsWith("duckduckgo.com")) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function pickDebug(r) {
