@@ -13,15 +13,6 @@
   </header>
 
   <main>
-    <section class="card search-form">
-      <h2>Search by Title</h2>
-      <label for="query">Raw novel only (non-English)</label>
-      <div class="input-row">
-        <input id="query" type="text" name="q" placeholder="Enter raw title" />
-        <button id="search" class="primary" type="button">Search</button>
-      </div>
-      <p class="help-text">Tip: Currently unable to search using English titles</p>
-    </section>
 
    <section class="card">
   <h2>1) Enter raw title (non-English)</h2>
@@ -31,6 +22,35 @@
     <input id="rawTitle" type="text" placeholder="e.g., 诡秘之主" />
     <button id="buildLinks" class="primary" type="button">Generate search links</button>
   </div>
+
+     <section class="card">
+  <h2>2) Paste a novel page URL</h2>
+  <label for="novelUrl">Novel URL (from any supported source)</label>
+  <div class="input-row">
+    <input id="novelUrl" type="url" placeholder="Paste the novel page URL you found" />
+    <button id="detect" class="primary" type="button">Detect source</button>
+  </div>
+  <p class="help-text">
+    After you click a search link, open the novel page, then copy & paste the URL here.
+  </p>
+</section>
+
+<section class="card">
+  <div class="results-header">
+    <div>
+      <p class="eyebrow">Results</p>
+      <h2 class="results-title">Detected source + canonical link</h2>
+      <p id="hint" class="placeholder">Generate search links or paste a URL to begin.</p>
+    </div>
+    <span id="status" class="status-pill">Idle</span>
+  </div>
+
+  <div id="meta" class="meta"></div>
+  <div class="results-body">
+    <ul id="list" class="results-list"></ul>
+  </div>
+</section>
+
 
   <div class="input-row" style="margin-top:10px; flex-wrap:wrap;">
     <div style="min-width:220px;">
