@@ -176,14 +176,20 @@ function extractFirstUrlMatching(html, regex) {
 }
 
 function domainFromRe(re) {
-  const s = re.source;
-  // very small helper: pull the first domain we see like "fanqienovel\.com"
-  const m = s.match(/([a-z0-9-]+\\\.[a-z0-9.-]+)\\\./i);
-  if (m) return m[1].replaceAll("\\", "");
-  // fallback: attempt to find "www\.xxx\.com"
-  const m2 = s.match(/www\\\.([a-z0-9.-]+)\\\./i);
-  if (m2) return m2[1].replaceAll("\\", "");
-  return "";
+  // Normalize the regex source so we can reliably extract the domain even
+  // though it contains lots of escaped characters.
+  const unescaped = re.source
+    .replace(/\\\./g, ".")
+    .replace(/\\\//g, "/");
+
+  // Prefer an explicit domain after the protocol, e.g. https://example.com/
+  const direct = unescaped.match(/https?:\/\/(?:www\.)?([^/]+)/i);
+  if (direct?.[1]) return direct[1];
+
+  // Fallback: search for something that looks like a domain even if protocol
+  // matching failed.
+  const loose = unescaped.match(/([a-z0-9-]+\.[a-z0-9.-]+)/i);
+  return loose?.[1] || "";
 }
 
 // -----------------------------
