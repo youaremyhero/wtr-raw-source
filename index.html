@@ -1,1 +1,67 @@
-test
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Raw Novel Source Search</title>
+  <link rel="stylesheet" href="styles/styles.css" />
+</head>
+<body>
+  <header class="page-header">
+    <h1>Raw Novel Source Search</h1>
+    <p class="lede">Find raw source links for your favorite novels.</p>
+  </header>
+
+  <main>
+    <section aria-labelledby="search-section-title" class="search-panel">
+      <div class="card">
+        <h2 id="search-section-title">Search by Title</h2>
+        <form class="search-form" aria-label="Raw novel search form">
+          <label for="novel-title">Raw novel title</label>
+          <div class="input-row">
+            <input
+              type="text"
+              id="novel-title"
+              name="novel-title"
+              placeholder="Enter the raw novel title"
+              autocomplete="off"
+              required
+              data-binding="title"
+            />
+            <button type="submit" class="primary" data-action="submit">Search</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section aria-labelledby="results-section-title" class="results-panel">
+      <div class="card">
+        <header class="results-header">
+          <div>
+            <p class="eyebrow">Results</p>
+            <h2 id="results-section-title">Matching source links</h2>
+          </div>
+          <p class="result-count" aria-live="polite" data-binding="result-count">No results yet</p>
+        </header>
+
+        <div class="results-body" aria-live="polite" data-binding="results">
+          <p class="placeholder" data-state="empty">Start by searching for a raw novel title.</p>
+          <p class="placeholder" data-state="not-found" hidden>No matching sources found.</p>
+          <ul class="results-list" data-state="found" hidden>
+            <li class="result-item" data-template hidden>
+              <article>
+                <h3 data-binding="source-title">Source Title</h3>
+                <p class="source-url">
+                  <a href="#" data-binding="source-url">https://example.com/source</a>
+                </p>
+              </article>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/main.js"></script>
+</body>
+</html>
