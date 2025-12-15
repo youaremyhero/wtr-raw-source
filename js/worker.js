@@ -7,38 +7,35 @@ export default {
 
     if (url.pathname === "/search") {
       const q = (url.searchParams.get("q") || "").trim();
+      const debugMode = url.searchParams.get("debug") === "1";
+
       if (!q) return cors(json({ error: "Missing q" }, 400));
 
       // 1) Resolve raw title if input is likely English
       let rawTitle = q;
-      let nu = { seriesUrl: null, resolved: false, associatedNames: [] };
+      let nu = { seriesUrl: null, resolved: false, rawTitle: null, associatedNames: [] };
 
       if (looksEnglish(q)) {
-        const nuRes = await resolveViaNovelUpdates(q);
+        const nuRes = await resolveViaNovelUpdates(q, debugMode);
         nu = nuRes;
         if (nuRes.rawTitle) rawTitle = nuRes.rawTitle;
       }
 
       // 2) Search allowed source domains for raw title
-      const matches = await findSourceMatches(rawTitle);
+      const debug = [];
+      const matches = await findSourceMatches(rawTitle, { debugMode, debug });
 
-      if (!matches.length) {
-        return cors(json({
-          query: q,
-          rawTitle: (rawTitle !== q ? rawTitle : null),
-          nu,
-          matches: [],
-          notFound: true
-        }));
-      }
-
-      return cors(json({
+      const payload = {
         query: q,
-        rawTitle: rawTitle,
+        rawTitle: rawTitle !== q ? rawTitle : null, // keep your previous convention
         nu,
         matches,
-        notFound: false
-      }));
+        notFound: !matches.length
+      };
+
+      if (debugMode) payload.debug = debug;
+
+      return cors(json(payload));
     }
 
     return cors(new Response("Not found", { status: 404 }));
@@ -70,45 +67,47 @@ const SOURCES = [
 // -----------------------------
 // NovelUpdates resolution
 // -----------------------------
-async function resolveViaNovelUpdates(englishTitle) {
-  // Step A: find a /series/ page by searching DuckDuckGo HTML
-  const q = `site:novelupdates.com/series "${englishTitle}"`;
-  const ddgHtml = await ddgHtmlSearch(q);
-  const seriesUrl = extractFirstUrlMatching(ddgHtml, /https?:\/\/www\.novelupdates\.com\/series\/[^"'<\s]+/i);
+async function resolveViaNovelUpdates(englishTitle, debugMode) {
+  // Step A: find a /series/ page by searching DuckDuckGo Lite
+  const query = `site:novelupdates.com/series "${englishTitle}"`;
+  const r = await ddgLiteSearch(query);
+
+  const links = extractDuckDuckGoLiteLinks(r.text);
+  const seriesUrl = links.find(u => /^https?:\/\/www\.novelupdates\.com\/series\//i.test(u)) || null;
 
   if (!seriesUrl) {
-    return { seriesUrl: null, resolved: false, rawTitle: null, associatedNames: [] };
+    return {
+      seriesUrl: null,
+      resolved: false,
+      rawTitle: null,
+      associatedNames: [],
+      ...(debugMode ? { debug: { ddg: pickDebug(r) } } : {})
+    };
   }
 
   // Step B: fetch series page and parse "Associated Names"
   const page = await fetchText(seriesUrl);
   const associated = parseAssociatedNames(page);
 
-  // Choose a likely raw title:
-  // Prefer names containing CJK characters; otherwise first associated name.
   const rawTitle = pickLikelyRawTitle(associated);
 
-  return { seriesUrl, resolved: !!rawTitle, rawTitle: rawTitle || null, associatedNames: associated };
+  const out = { seriesUrl, resolved: !!rawTitle, rawTitle: rawTitle || null, associatedNames: associated };
+  if (debugMode) out.debug = { ddg: pickDebug(r) };
+  return out;
 }
 
 function parseAssociatedNames(html) {
-  // Robust-ish parsing without a full DOM:
-  // Look for "Associated Names" block and extract list items / line breaks
   const idx = html.toLowerCase().indexOf("associated names");
   if (idx === -1) return [];
 
-  const slice = html.slice(idx, idx + 6000);
-
-  // common patterns: <li>name</li> or <br>name<br>
+  const slice = html.slice(idx, idx + 8000);
   const names = new Set();
 
-  // li items
   for (const m of slice.matchAll(/<li[^>]*>(.*?)<\/li>/gis)) {
     const txt = stripTags(m[1]).trim();
     if (txt) names.add(txt);
   }
 
-  // br separated
   const brBlock = slice.match(/associated names[\s\S]*?(<br[\s\/]*>[\s\S]*?)(<\/div>|<\/section>|<\/table>)/i);
   if (brBlock) {
     const parts = brBlock[1]
@@ -118,7 +117,7 @@ function parseAssociatedNames(html) {
     for (const p of parts) names.add(p);
   }
 
-  return [...names].slice(0, 20);
+  return [...names].slice(0, 30);
 }
 
 function pickLikelyRawTitle(names) {
@@ -128,97 +127,124 @@ function pickLikelyRawTitle(names) {
 }
 
 // -----------------------------
-// Search allowed sources
+// Search allowed sources (using DDG Lite + decoded urls)
 // -----------------------------
-function extractResultHrefs(ddgHtml){
-  // DuckDuckGo HTML uses <a class="result__a" href="...">
-  const hrefs = [];
-  for (const m of ddgHtml.matchAll(/<a[^>]+class="result__a"[^>]+href="([^"]+)"/gi)){
-    hrefs.push(m[1]);
-  }
-  return hrefs;
-}
-
-function decodeDuckDuckGoUrl(href){
-  // Sometimes DDG uses redirect URLs like /l/?uddg=<encoded>
-  try {
-    const u = new URL(href, "https://duckduckgo.com");
-    const uddg = u.searchParams.get("uddg");
-    if (uddg) return decodeURIComponent(uddg);
-    // if it’s already an absolute URL, return it
-    if (u.protocol.startsWith("http")) return u.href;
-  } catch {}
-  return null;
-}
-
-
-async function findSourceMatches(rawTitle) {
+async function findSourceMatches(rawTitle, { debugMode, debug }) {
   const tasks = SOURCES.map(async (s) => {
     const domain = domainFromRe(s.re);
-    const q = `"${rawTitle}" site:${domain}`;
-    const ddgHtml = await ddgHtmlSearch(q);
+    const query = `"${rawTitle}" site:${domain}`;
 
-    const hrefs = extractResultHrefs(ddgHtml)
-      .map(decodeDuckDuckGoUrl)
-      .filter(Boolean);
+    const r = await ddgLiteSearch(query);
 
-    const foundUrl = hrefs.find(u => s.re.test(u));
+    if (debugMode) {
+      debug.push({
+        source: s.source,
+        domain,
+        query,
+        ...pickDebug(r)
+      });
+    }
+
+    // If blocked/empty, no point continuing
+    if (!r.ok || r.text.length < 200) return null;
+
+    const links = extractDuckDuckGoLiteLinks(r.text);
+
+    const foundUrl = links.find(u => s.re.test(u)) || null;
     if (!foundUrl) return null;
 
     const m = foundUrl.match(s.re);
     if (!m) return null;
 
     const id = m[1];
-    return { source: s.source, serieId: id, foundUrl, canonicalUrl: s.canonical(id) };
+    return {
+      source: s.source,
+      serieId: id,
+      foundUrl,
+      canonicalUrl: s.canonical(id)
+    };
   });
 
   const results = (await Promise.all(tasks)).filter(Boolean);
+
+  // De-dupe by canonicalUrl
   const seen = new Set();
   return results.filter(r => (seen.has(r.canonicalUrl) ? false : (seen.add(r.canonicalUrl), true)));
 }
 
+// -----------------------------
+// DuckDuckGo Lite search
+// -----------------------------
+async function ddgLiteSearch(query) {
+  const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
 
-// -----------------------------
-// DuckDuckGo HTML search (no API key)
-// -----------------------------
-async function ddgHtmlSearch(query) {
-  // DuckDuckGo HTML endpoint
-  const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  return await fetchText(url, {
+  const res = await fetch(url, {
     headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; RawNovelSourceSearch/1.0; +https://github.com/)",
+      "User-Agent": "Mozilla/5.0",
       "Accept-Language": "en-US,en;q=0.9"
     }
   });
+
+  const text = await res.text().catch(() => "");
+  return { ok: res.ok, status: res.status, url: res.url, text };
 }
 
-function extractFirstUrlMatching(html, regex) {
-  const m = html.match(regex);
-  return m ? m[0] : null;
+function extractDuckDuckGoLiteLinks(html) {
+  // Grab all hrefs, decode /l/?uddg= links to real URLs
+  const out = [];
+  for (const m of html.matchAll(/href="([^"]+)"/gi)) {
+    const href = m[1];
+
+    try {
+      const u = new URL(href, "https://duckduckgo.com");
+      const uddg = u.searchParams.get("uddg");
+
+      if (uddg) {
+        out.push(decodeURIComponent(uddg));
+      } else if (u.protocol.startsWith("http")) {
+        out.push(u.href);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // de-dupe while preserving order
+  const seen = new Set();
+  return out.filter(x => (seen.has(x) ? false : (seen.add(x), true)));
 }
 
+function pickDebug(r) {
+  return {
+    ok: r.ok,
+    status: r.status,
+    url: r.url,
+    len: r.text.length,
+    head: r.text.slice(0, 140)
+  };
+}
+
+// -----------------------------
+// Domain helper
+// -----------------------------
 function domainFromRe(re) {
-  // Normalize the regex source so we can reliably extract the domain even
-  // though it contains lots of escaped characters.
   const unescaped = re.source
     .replace(/\\\./g, ".")
     .replace(/\\\//g, "/");
 
-  // Prefer an explicit domain after the protocol, e.g. https://example.com/
   const direct = unescaped.match(/https?:\/\/(?:www\.)?([^/]+)/i);
   if (direct?.[1]) return direct[1];
 
-  // Fallback: search for something that looks like a domain even if protocol
-  // matching failed.
   const loose = unescaped.match(/([a-z0-9-]+\.[a-z0-9.-]+)/i);
   return loose?.[1] || "";
 }
 
 // -----------------------------
-// Helpers
+// Generic helpers
 // -----------------------------
-async function fetchText(url, init={}) {
+async function fetchText(url, init = {}) {
   const res = await fetch(url, init);
+  // keep your original behavior (silent failures), but now we debug DDG separately
   if (!res.ok) return "";
   return await res.text();
 }
@@ -228,12 +254,11 @@ function stripTags(html) {
 }
 
 function looksEnglish(s) {
-  // heuristic: mostly ASCII letters/numbers/punctuation
   const ascii = (s.match(/[\x20-\x7E]/g) || []).length;
   return ascii / Math.max(1, s.length) > 0.85;
 }
 
-function json(obj, status=200) {
+function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
     headers: { "Content-Type": "application/json; charset=utf-8" }
