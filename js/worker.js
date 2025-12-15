@@ -130,31 +130,53 @@ function pickLikelyRawTitle(names) {
 // -----------------------------
 // Search allowed sources
 // -----------------------------
+function extractResultHrefs(ddgHtml){
+  // DuckDuckGo HTML uses <a class="result__a" href="...">
+  const hrefs = [];
+  for (const m of ddgHtml.matchAll(/<a[^>]+class="result__a"[^>]+href="([^"]+)"/gi)){
+    hrefs.push(m[1]);
+  }
+  return hrefs;
+}
+
+function decodeDuckDuckGoUrl(href){
+  // Sometimes DDG uses redirect URLs like /l/?uddg=<encoded>
+  try {
+    const u = new URL(href, "https://duckduckgo.com");
+    const uddg = u.searchParams.get("uddg");
+    if (uddg) return decodeURIComponent(uddg);
+    // if it’s already an absolute URL, return it
+    if (u.protocol.startsWith("http")) return u.href;
+  } catch {}
+  return null;
+}
+
+
 async function findSourceMatches(rawTitle) {
   const tasks = SOURCES.map(async (s) => {
-    const q = `"${rawTitle}" site:${domainFromRe(s.re)}`;
-    const html = await ddgHtmlSearch(q);
-    const foundUrl = extractFirstUrlMatching(html, s.re);
+    const domain = domainFromRe(s.re);
+    const q = `"${rawTitle}" site:${domain}`;
+    const ddgHtml = await ddgHtmlSearch(q);
+
+    const hrefs = extractResultHrefs(ddgHtml)
+      .map(decodeDuckDuckGoUrl)
+      .filter(Boolean);
+
+    const foundUrl = hrefs.find(u => s.re.test(u));
     if (!foundUrl) return null;
 
     const m = foundUrl.match(s.re);
     if (!m) return null;
 
     const id = m[1];
-    return {
-      source: s.source,
-      serieId: id,
-      foundUrl,
-      canonicalUrl: s.canonical(id)
-    };
+    return { source: s.source, serieId: id, foundUrl, canonicalUrl: s.canonical(id) };
   });
 
   const results = (await Promise.all(tasks)).filter(Boolean);
-
-  // De-dupe by canonicalUrl
   const seen = new Set();
   return results.filter(r => (seen.has(r.canonicalUrl) ? false : (seen.add(r.canonicalUrl), true)));
 }
+
 
 // -----------------------------
 // DuckDuckGo HTML search (no API key)
