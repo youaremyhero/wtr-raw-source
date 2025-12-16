@@ -258,11 +258,12 @@ select {
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  text-decoration: none;
-  color: var(--text);
-  background: var(--chip-bg);
+  background: var(--accent);
+  color: #ffffff;
   cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.2s ease;
+  white-space: nowrap;
+  box-shadow: 0 10px 22px -16px var(--accent);
+  transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
 }
 
 .link-btn:hover {
