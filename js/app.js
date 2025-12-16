@@ -150,24 +150,17 @@ function buildSearchLinks() {
         <a class="link-btn" href="${href}" target="_blank" rel="noopener">Open search</a>
         <button class="link-btn" type="button" data-copy="${escapeHtml(q)}">Copy query</button>
       </div>
-      <div class="html-preview">
-        <label for="allHtmlPreview">Generated HTML (live)</label>
-        <input id="allHtmlPreview" type="text" readonly aria-live="polite" />
+      <div class="url-preview">
+        <label for="allUrlPreview">Generated URL (live)</label>
+        <input id="allUrlPreview" type="text" readonly aria-live="polite" />
       </div>
     `;
 
     linksEl.appendChild(row);
 
-    const previewInput = $("allHtmlPreview");
+    const previewInput = $("allUrlPreview");
     if (previewInput) {
-      const template = document.createElement("div");
-      const clone = row.cloneNode(true);
-      clone.querySelector(".html-preview")?.remove();
-      template.appendChild(clone);
-      const normalizedHtml = template.innerHTML
-        .replace(/>\s+</g, "><")
-        .trim();
-      previewInput.value = normalizedHtml;
+      previewInput.value = href;
     }
   }
 
