@@ -137,18 +137,38 @@ function buildSearchLinks() {
     const q = buildQuery({ engine, mode, raw, also, exclude, domain: null });
     const href = makeUrl(q);
 
-    linksEl.insertAdjacentHTML("beforeend", `
-      <div class="link-row" style="grid-template-columns: 1fr;">
-        <div class="link-row-left">
-          <div class="link-source">Search ALL supported sources</div>
-          <div class="link-domain">${escapeHtml(engine.toUpperCase())} · ${escapeHtml(modeLabel(mode))}</div>
-        </div>
-        <div class="link-row-right" style="justify-content:flex-start;">
-          <a class="link-btn" href="${href}" target="_blank" rel="noopener">Open search</a>
-          <button class="link-btn" type="button" data-copy="${escapeHtml(q)}">Copy query</button>
-        </div>
+    const row = document.createElement("div");
+    row.className = "link-row";
+    row.style.gridTemplateColumns = "1fr";
+
+    row.innerHTML = `
+      <div class="link-row-left">
+        <div class="link-source">Search ALL supported sources</div>
+        <div class="link-domain">${escapeHtml(engine.toUpperCase())} · ${escapeHtml(modeLabel(mode))}</div>
       </div>
-    `);
+      <div class="link-row-right" style="justify-content:flex-start;">
+        <a class="link-btn" href="${href}" target="_blank" rel="noopener">Open search</a>
+        <button class="link-btn" type="button" data-copy="${escapeHtml(q)}">Copy query</button>
+      </div>
+      <div class="html-preview">
+        <label for="allHtmlPreview">Generated HTML (live)</label>
+        <input id="allHtmlPreview" type="text" readonly aria-live="polite" />
+      </div>
+    `;
+
+    linksEl.appendChild(row);
+
+    const previewInput = $("allHtmlPreview");
+    if (previewInput) {
+      const template = document.createElement("div");
+      const clone = row.cloneNode(true);
+      clone.querySelector(".html-preview")?.remove();
+      template.appendChild(clone);
+      const normalizedHtml = template.innerHTML
+        .replace(/>\s+</g, "><")
+        .trim();
+      previewInput.value = normalizedHtml;
+    }
   }
 
   // Per-source rows (always shown for _each modes; optional for _all as “advanced”)

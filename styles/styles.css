@@ -1,16 +1,16 @@
 :root {
   /* Light mode (default) */
-  --bg: #f4f7fb;
-  --bg-gradient: radial-gradient(circle at 20% 20%, #ffffff, #e9f1ff 38%, #e3ecff 70%);
+  --bg: #f7f9fc;
+  --bg-gradient: radial-gradient(circle at 20% 20%, #ffffff, #f1f5fb 40%, #e8edf6 70%);
   --card: #ffffff;
   --text: #0b1220;
   --muted: #4c5a6a;
   --border: rgba(15,23,42,0.12);
   --accent: #1d6ff2;
   --accent-2: #e3edff;
-  --field-bg: #eef2f9;
-  --chip-bg: #f2f6ff;
-  --code-bg: #eef2fa;
+  --field-bg: #ffffff;
+  --chip-bg: #ffffff;
+  --code-bg: #f6f8fc;
   --shadow: 0 14px 32px -28px rgba(15, 23, 42, 0.55);
 
   --radius: 14px;
@@ -201,7 +201,7 @@ select {
   gap: 10px;
 }
 
-.link-row {
+.link-row { 
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 10px 12px;
@@ -210,6 +210,30 @@ select {
   gap: 10px;
   align-items: center;
   background: var(--chip-bg);
+}
+
+.html-preview {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+}
+
+.html-preview label {
+  display: block;
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.html-preview input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.95rem;
+  box-shadow: inset 0 1px 0 rgba(15, 23, 42, 0.04);
 }
 
 .link-row-left .link-source {
