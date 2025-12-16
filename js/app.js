@@ -77,7 +77,15 @@ function buildQuery({ engine, mode, raw, also, exclude, domain }) {
     .map(w => `-${w}`)
     .join(" ");
 
-  const siteExpr = domain ? `site:${domain}` : `(${SOURCES.map(s => `site:${s.domain}`).join(" OR ")})`;
+  // Engine-specific site expression handling (Baidu doesn't reliably parse parentheses + OR)
+  let siteExpr;
+  if (domain) {
+    siteExpr = `site:${domain}`;
+  } else {
+    siteExpr = (engine === "baidu")
+      ? `site:(${SOURCES.map(s => s.domain).join("|")})`
+      : `(${SOURCES.map(s => `site:${s.domain}`).join(" OR ")})`;
+  }
 
   // Engine-specific capability handling
   const supportsIntitle = (engine === "google" || engine === "bing");
